@@ -1,0 +1,11 @@
+{
+  "name": "mini_game",
+  "version": "1.0.0",
+  "description": "A mini game project",
+  "main": "game.js",
+  "scripts": {
+    "start": "node game.js"
+  },
+  "author": "",
+  "license": "ISC"
+}
