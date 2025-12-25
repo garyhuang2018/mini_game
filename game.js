@@ -1,12 +1,13 @@
-// game.js - 完整整合版本
 const Player = require('./objects/player');
+const Goalkeeper = require('./objects/goalkeeper');
+const VirtualJoystick = require('./utils/joystick');
 
 const canvas = tt.createCanvas();
 const ctx = canvas.getContext('2d');
 const screenWidth = canvas.width;
 const screenHeight = canvas.height;
 
-// ==================== 1. 特效系统 ====================
+// ==================== 1. 特效系统 (完整定义) ====================
 class ParticleSystem {
   constructor() {
     this.particles = [];
@@ -102,7 +103,7 @@ class ParticleSystem {
   }
 }
 
-// ==================== 2. 屏幕震动系统 ====================
+// ==================== 2. 屏幕震动系统 (完整定义) ====================
 class ScreenShake {
   constructor() {
     this.intensity = 0;
@@ -127,16 +128,14 @@ class ScreenShake {
   }
 }
 
-// ==================== 3. 技能系统 ====================
+// ==================== 3. 技能系统 (完整定义) ====================
 class SkillManager {
   constructor() {
-    this.currentSkill = null;
     this.skillCooldown = 0;
     this.skills = {
-      'fire': { name: '火焰射门', color: '#FF4500', power: 25, cooldown: 180 },
-      'lightning': { name: '闪电射门', color: '#00FFFF', power: 22, cooldown: 150 },
-      'banana': { name: '香蕉球', color: '#FFD700', power: 18, cooldown: 120 },
-      'super': { name: '超级射门', color: '#FF00FF', power: 30, cooldown: 240 }
+      'fire': { name: '火焰', color: '#FF4500', power: 25, cooldown: 120 },
+      'lightning': { name: '闪电', color: '#00FFFF', power: 22, cooldown: 100 },
+      'super': { name: '必杀', color: '#FF00FF', power: 35, cooldown: 200 }
     };
   }
   activateSkill(type, ball, fromX, fromY) {
@@ -145,12 +144,13 @@ class SkillManager {
     const dx = ball.x - fromX;
     const dy = ball.y - fromY;
     const dist = Math.sqrt(dx * dx + dy * dy);
-    if (dist > 180) return false; // 判定范围稍微放大
+    
+    // 必杀技触球范围
+    if (dist > 100) return false; 
 
     ball.vx = (dx / dist) * skill.power;
     ball.vy = (dy / dist) * skill.power;
     this.skillCooldown = skill.cooldown;
-    this.currentSkill = type;
     return true;
   }
   update() {
@@ -158,10 +158,11 @@ class SkillManager {
   }
 }
 
-// ==================== 4. 初始化对象 ====================
-const particleSystem = new ParticleSystem();
-const screenShake = new ScreenShake();
-const skillManager = new SkillManager();
+// ==================== 4. 初始化游戏对象 ====================
+const particles = new ParticleSystem();
+const shake = new ScreenShake();
+const skills = new SkillManager();
+const joystick = new VirtualJoystick(100, screenHeight - 100);
 
 const gameObjects = {
   ball: { 
@@ -170,49 +171,96 @@ const gameObjects = {
     isSuper: false, superTimer: 0 
   },
   player: new Player(150, screenHeight / 2),
-  score: { player: 0, ai: 0 }
+  goalie: new Goalkeeper(screenWidth - 50, screenHeight / 2),
+  score: 0
 };
 
 const shootButtons = [
-  { x: screenWidth - 60, y: screenHeight - 260, type: 'fire', label: '🔥' },
-  { x: screenWidth - 60, y: screenHeight - 190, type: 'lightning', label: '⚡' },
-  { x: screenWidth - 60, y: screenHeight - 120, type: 'banana', label: '🍌' },
-  { x: screenWidth - 60, y: screenHeight - 50, type: 'super', label: '💥' }
+  { x: screenWidth - 70, y: screenHeight - 210, type: 'fire', label: '🔥' },
+  { x: screenWidth - 70, y: screenHeight - 140, type: 'lightning', label: '⚡' },
+  { x: screenWidth - 70, y: screenHeight - 70, type: 'super', label: '💥' }
 ];
 
 // ==================== 5. 核心逻辑 ====================
 
-function updatePhysics() {
-  const ball = gameObjects.ball;
+function update() {
+  const { player, ball, goalie } = gameObjects;
+
+  // 1. 摇杆控制移动
+  if (joystick.active) {
+    player.x += joystick.vector.x * 5;
+    player.y += joystick.vector.y * 5;
+    player.state = 'move';
+    if (Math.abs(joystick.vector.x) > 0.1) player.dir = joystick.vector.x > 0 ? 1 : -1;
+  } else if (player.state === 'move') {
+    player.state = 'idle';
+  }
+  player.update();
+
+  // 2. 守门员更新
+  goalie.updateAI(ball);
+
+  // 3. 碰撞检测
+  checkBallCollision(ball, player, true);
+  checkBallCollision(ball, goalie, false);
+
+  // 4. 物理更新
+  updateBallPhysics(ball);
+  
+  // 5. 系统更新
+  particles.update();
+  shake.update();
+  skills.update();
+}
+
+function checkBallCollision(ball, person, isPlayer) {
+  const dx = ball.x - person.x;
+  const dy = ball.y - person.y;
+  const dist = Math.sqrt(dx * dx + dy * dy);
+  
+  if (dist < ball.radius + person.radius) {
+    if (isPlayer) {
+      // 球员带球：轻微推力
+      ball.vx = (ball.x - person.x) * 0.2 + (person.state === 'move' ? person.dir * 2 : 0);
+      ball.vy = (ball.y - person.y) * 0.2;
+    } else {
+      // 守门员：强力反弹
+      ball.vx = -Math.abs(ball.vx) - 6;
+      ball.vy += (Math.random() - 0.5) * 8;
+      shake.shake(8, 5);
+      particles.createSpark(ball.x, ball.y, '#FF0');
+    }
+  }
+}
+
+function updateBallPhysics(ball) {
   ball.x += ball.vx;
   ball.y += ball.vy;
-  ball.vx *= 0.98;
-  ball.vy *= 0.98;
+  ball.vx *= 0.985; // 摩擦力
+  ball.vy *= 0.985;
 
-  // 边界碰撞
+  // 边界
   if (ball.y < ball.radius || ball.y > screenHeight - ball.radius) {
     ball.vy *= -0.8;
-    particleSystem.createSpark(ball.x, ball.y, '#FFF');
   }
-  
-  // 进球检测 (右侧球门)
-  if (ball.x > screenWidth - 20) {
-    if (ball.y > screenHeight / 2 - 60 && ball.y < screenHeight / 2 + 60) {
-      gameObjects.score.player++;
-      particleSystem.createExplosion(ball.x, ball.y, 'super');
-      screenShake.shake(20, 15);
-      tt.vibrateLong();
+
+  // 进球判定
+  if (ball.x > screenWidth - 30) {
+    if (ball.y > screenHeight / 2 - 70 && ball.y < screenHeight / 2 + 70) {
+      // GOAL!!
+      gameObjects.score++;
+      particles.createExplosion(ball.x, ball.y, 'super');
+      shake.shake(25, 20);
       resetBall();
     } else {
       ball.vx *= -0.8;
     }
   }
-
-  if (ball.x < 20) ball.vx *= -0.8;
-
-  // 轨迹特效
-  if (Math.abs(ball.vx) > 2) {
-    particleSystem.createTrail(ball.x, ball.y, ball.vx, ball.vy, ball.isSuper ? '#FF00FF' : '#FFF');
+  if (ball.x < ball.radius) ball.vx *= -0.8;
+  
+  // 拖尾效果
+  if (Math.abs(ball.vx) > 3) {
+    particles.createTrail(ball.x, ball.y, ball.vx, ball.vy, ball.isSuper ? '#F0F' : '#FFF');
   }
 }
 
@@ -224,107 +272,96 @@ function resetBall() {
   gameObjects.ball.isSuper = false;
 }
 
+// ==================== 6. 输入处理 ====================
 function initInput() {
   tt.onTouchStart((e) => {
     const touch = e.touches[0];
-    // 检查按钮点击
+    // 检查技能按钮
     for (const btn of shootButtons) {
-      const dist = Math.sqrt((touch.clientX - btn.x)**2 + (touch.clientY - btn.y)**2);
-      if (dist < 30) {
-        if (skillManager.activateSkill(btn.type, gameObjects.ball, gameObjects.player.x, gameObjects.player.y)) {
-          gameObjects.player.shoot(); // 触发球员射门动作
-          particleSystem.createExplosion(gameObjects.ball.x, gameObjects.ball.y, btn.type);
-          if (btn.type === 'super') {
-             gameObjects.ball.isSuper = true;
-             screenShake.shake(20, 15);
-          }
+      const d = Math.sqrt((touch.clientX - btn.x)**2 + (touch.clientY - btn.y)**2);
+      if (d < 35) {
+        if (skills.activateSkill(btn.type, gameObjects.ball, gameObjects.player.x, gameObjects.player.y)) {
+          gameObjects.player.shoot();
+          particles.createExplosion(gameObjects.ball.x, gameObjects.ball.y, btn.type);
+          if (btn.type === 'super') gameObjects.ball.isSuper = true;
           tt.vibrateShort();
         }
         return;
       }
     }
-    // 移动球员
-    gameObjects.player.moveTo(touch.clientX, touch.clientY);
+    joystick.handleTouch(e, 'start');
   });
 
-  tt.onTouchMove((e) => {
-    const touch = e.touches[0];
-    gameObjects.player.moveTo(touch.clientX, touch.clientY);
-  });
+  tt.onTouchMove((e) => joystick.handleTouch(e, 'move'));
+  tt.onTouchEnd((e) => joystick.handleTouch(e, 'end'));
 }
 
-// ==================== 6. 渲染引擎 ====================
-
+// ==================== 7. 渲染层 ====================
 function render() {
-  // 背景
-  ctx.fillStyle = '#4CAF50';
-  ctx.fillRect(0, 0, screenWidth, screenHeight);
+  // 1. 绘制草坪背景 (格子风格)
+  for (let i = 0; i < screenWidth; i += 60) {
+    ctx.fillStyle = (i / 60) % 2 === 0 ? '#4CAF50' : '#45a049';
+    ctx.fillRect(i, 0, 60, screenHeight);
+  }
 
-  // 震动
-  const offset = screenShake.getOffset();
+  const offset = shake.getOffset();
   ctx.save();
   ctx.translate(offset.x, offset.y);
 
-  // 绘制球门
+  // 2. 绘制球门
   ctx.strokeStyle = 'white';
   ctx.lineWidth = 4;
-  ctx.strokeRect(screenWidth - 40, screenHeight/2 - 60, 40, 120);
+  ctx.strokeRect(screenWidth - 40, screenHeight/2 - 70, 40, 140);
 
-  // 特效渲染
-  particleSystem.render(ctx);
+  // 3. 渲染特效
+  particles.render(ctx);
 
-  // 足球渲染
-  const ball = gameObjects.ball;
-  ctx.fillStyle = ball.isSuper ? '#FF00FF' : 'white';
-  ctx.beginPath();
-  ctx.arc(ball.x, ball.y, ball.radius, 0, Math.PI*2);
-  ctx.fill();
-  ctx.strokeStyle = 'black';
-  ctx.lineWidth = 2;
-  ctx.stroke();
-
-  // 球员渲染 (重点！)
+  // 4. 渲染角色
   gameObjects.player.render(ctx);
+  gameObjects.goalie.render(ctx);
 
-  // 界面渲染
-  renderUI();
+  // 5. 渲染足球
+  const b = gameObjects.ball;
+  ctx.save();
+  ctx.translate(b.x, b.y);
+  ctx.fillStyle = b.isSuper ? '#FF00FF' : 'white';
+  ctx.beginPath(); ctx.arc(0, 0, b.radius, 0, Math.PI*2); ctx.fill();
+  ctx.strokeStyle = 'black'; ctx.lineWidth = 2; ctx.stroke();
+  ctx.restore();
 
   ctx.restore();
+
+  // 6. UI
+  renderUI();
 }
 
 function renderUI() {
-  // 绘制按钮
+  // 摇杆
+  joystick.render(ctx);
+  
+  // 按钮
   shootButtons.forEach(btn => {
-    ctx.fillStyle = 'rgba(0,0,0,0.3)';
-    ctx.beginPath(); ctx.arc(btn.x, btn.y, 25, 0, Math.PI*2); ctx.fill();
+    ctx.fillStyle = 'rgba(0,0,0,0.4)';
+    ctx.beginPath(); ctx.arc(btn.x, btn.y, 30, 0, Math.PI*2); ctx.fill();
     ctx.fillStyle = 'white';
     ctx.font = '24px Arial';
     ctx.textAlign = 'center';
-    ctx.fillText(btn.label, btn.x, btn.y + 8);
+    ctx.fillText(btn.label, btn.x, btn.y + 10);
   });
 
   // 分数
   ctx.fillStyle = 'white';
   ctx.font = 'bold 30px Arial';
-  ctx.fillText(`SCORE: ${gameObjects.score.player}`, 80, 50);
+  ctx.textAlign = 'left';
+  ctx.fillText(`SCORE: ${gameObjects.score}`, 30, 50);
 }
 
-// ==================== 7. 主循环 ====================
-
+// ==================== 8. 启动循环 ====================
 function loop() {
-  // 1. 更新数据
-  gameObjects.player.update();
-  updatePhysics();
-  particleSystem.update();
-  screenShake.update();
-  skillManager.update();
-
-  // 2. 绘制画面
+  update();
   render();
-
   requestAnimationFrame(loop);
 }
 
-// 启动
 initInput();
 loop();
